@@ -19,8 +19,7 @@ from . import (
 )
 from sqlalchemy.orm import Session
 from fastapi import Depends
-from services.database import get_db
-from services import db_data_fiber as crud
+
 
 log = logging.getLogger(__name__)
 router = APIRouter()

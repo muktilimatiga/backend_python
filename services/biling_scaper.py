@@ -213,10 +213,20 @@ class BillingScraper:
 
     def get_invoice_data(self, url: str) -> dict:
         try:
-            res = self.session.get(url, verify=False, timeout=20)
+            # Added shorter timeout for direct lookups
+            res = self.session.get(url, verify=False, timeout=10)
             res.raise_for_status()
         except requests.RequestException as e:
-            return {"paket": None, "invoices": [], "summary": {"this_month": None, "arrears_count": 0, "last_paid_month": None}}
+            # Return empty structure on failure so API doesn't crash
+            return {
+                "paket": None, 
+                "invoices": [], 
+                "summary": {
+                    "this_month": "Error", 
+                    "arrears_count": 0, 
+                    "last_paid_month": None
+                }
+            }
 
         soup = BeautifulSoup(res.text, "html.parser")
 
