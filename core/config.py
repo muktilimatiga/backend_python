@@ -2,12 +2,6 @@ from pydantic_settings import BaseSettings
 from typing import Optional, Dict
 
 class Settings(BaseSettings):
-    # --- PostgreSQL Database ---
-    DB_HOST: str
-    DB_PORT: int
-    DB_NAME: str
-    DB_USER: str
-    DB_PASS: str
 
     # --- Credentials ---
     OLT_USERNAME: str
