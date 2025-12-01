@@ -1,13 +1,11 @@
 import asyncio
 import re
-import telnetlib3
 import yaml
 import logging
 from jinja2 import Environment, FileSystemLoader
-from typing import List, Optional, Dict, Any
-from core.config import settings
-from core.olt_config import PACKAGE_OPTIONS, OLT_OPTIONS
+from core.olt_config import PACKAGE_OPTIONS
 from schemas.config_handler import UnconfiguredOnt, ConfigurationRequest
+from services.telnet_client import TelnetClient # <--- Import Base
 
 # --- Jinja2 Environment ---
 try:
@@ -16,132 +14,15 @@ except Exception as e:
     logging.error(f"[FATAL ERROR] Tidak dapat memuat folder 'templates' Jinja2: {e}")
     jinja_env = None
 
-class OltHandler:
-    def __init__(self, host: str, username: str, password: str, is_c600: bool):
-        self.host = host
-        self.username = username
-        self.password = password
-        self.is_c600 = is_c600
-        self.reader: Optional[telnetlib3.TelnetReader] = None
-        self.writer: Optional[telnetlib3.TelnetWriter] = None
-        # --- FIX: Using the simpler, more reliable regex from onu_handler.py ---
-        self._prompt_re = re.compile(r"(.+[>#])\s*$")
-        self._pagination_prompt = "--More--"
-
-    async def __aenter__(self):
-        try:
-            self.reader, self.writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, 23), timeout=20
-            )
-            await self._login()
-            await self._disable_pagination()
-            return self
-        except Exception as e:
-            await self._cleanup_connection()
-            raise ConnectionError(f"Failed to connect or login to OLT {self.host}: {e}")
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self._cleanup_connection()
-
-    async def _cleanup_connection(self):
-        if self.writer and not self.writer.is_closing():
-            try:
-                self.writer.write("\nexit\n")
-            except Exception:
-                pass
-            self.writer.close()
-            try:
-                await asyncio.wait_for(self.writer.wait_closed(), timeout=2)
-            except Exception:
-                pass
-        self.writer = None
-        self.reader = None
-
-    # --- FIX: Using the more robust _read_until_prompt from onu_handler.py ---
-    async def _read_until_prompt(self, timeout: int = 20) -> str:
-        if not self.reader:
-            raise ConnectionError("Telnet reader is not available.")
-        try:
-            data = ""
-            while True:
-                chunk = await asyncio.wait_for(self.reader.read(1024), timeout=timeout)
-                if not chunk:
-                    break
-                data += chunk
-
-                if re.search(self._prompt_re, data):
-                    break
-                
-                if self._pagination_prompt in data:
-                    if not self.writer:
-                        raise ConnectionError("Writer closed during pagination.")
-                    self.writer.write(" ")
-                    await self.writer.drain()
-                    data = data.replace(self._pagination_prompt, "")
-            return data
-        except asyncio.TimeoutError:
-            logging.warning(f"Timeout waiting for prompt from {self.host}")
-            raise
-        except Exception as e:
-            raise ConnectionError(f"Error reading from OLT {self.host}: {e}")
-
-    # --- FIX: Using the more robust _login from onu_handler.py ---
-    async def _login(self, timeout: int = 20):
-        try:
-            await asyncio.wait_for(self.reader.readuntil(b'Username:'), timeout=timeout)
-            self.writer.write(self.username + '\n')
-            
-            await asyncio.wait_for(self.reader.readuntil(b'Password:'), timeout=timeout)
-            self.writer.write(self.password + '\n')
-
-            await self._read_until_prompt(timeout=timeout)
-            
-            logging.info(f"Successfully logged in to OLT {self.host}")
-            
-        except asyncio.TimeoutError:
-            await self._cleanup_connection()
-            raise ConnectionError(f"Timeout during login to {self.host}")
-        except Exception as e:
-            await self._cleanup_connection()
-            raise ConnectionError(f"Failed to login: {e}")
-
-    async def _disable_pagination(self):
-        if not self.writer:
-            raise ConnectionError("Writer not available to disable pagination.")
-        
-        logging.info(f"Disabling pagination on {self.host}...")
-        await self._execute_command("terminal length 0", timeout=20)
-        logging.info(f"Pagination disabled on {self.host}.")
-
-    # --- FIX: Using the more robust _execute_command from onu_handler.py ---
-    async def _execute_command(self, command: str, timeout: int = 20) -> str:
-        if not self.reader or not self.writer:
-            raise ConnectionError("Connection not established to execute command.")
-        if not command:
-            return ""
-        
-        self.writer.write(command + "\n")
-        await asyncio.wait_for(self.writer.drain(), timeout=10)
-        raw_output = await self._read_until_prompt(timeout=timeout)
-        
-        cleaned_lines = []
-        lines = raw_output.splitlines()
-
-        if len(lines) > 2:
-            for line in lines[1:-1]:
-                stripped = line.strip()
-                if stripped:
-                    cleaned_lines.append(stripped)
-        
-        return "\n".join(cleaned_lines)
+class OltHandler(TelnetClient): # <--- Inherit from TelnetClient
     
-    # --- Kept your original (unchanged) methods below ---
-
     async def find_unconfigured_onts(self) -> list[UnconfiguredOnt]:
         command = "show pon onu uncfg" if self.is_c600 else "show gpon onu uncfg"
-        full_output = await self._execute_command(command)
-        found_onts = []
         
+        # FIX: Use self.execute_command (Public method from Parent)
+        full_output = await self.execute_command(command)
+        
+        found_onts = []
         for item in full_output.strip().splitlines():
             if ('GPON' in item and self.is_c600) or ('unknown' in item and not self.is_c600):
                 pon_slot, pon_port, sn = None, None, None
@@ -171,7 +52,10 @@ class OltHandler:
     async def find_next_available_onu_id(self, interface: str) -> int:
         logging.info(f"🔍 Mencari ID ONU yang kosong di {interface}...")
         cmd = f"show gpon onu state {interface}"
-        output = await self._execute_command(cmd)
+        
+        # FIX: Use self.execute_command
+        output = await self.execute_command(cmd)
+        
         active_onus = []
         identifier = 'enable' if self.is_c600 else '1(GPON)'
         
@@ -202,7 +86,10 @@ class OltHandler:
 
     async def get_dba_rate(self, interface: str) -> float:
         command = f"show pon bandwidth dba interface {interface}"
-        output = await self._execute_command(command)
+        
+        # FIX: Use self.execute_command
+        output = await self.execute_command(command)
+        
         if self.is_c600:
             pattern = rf"{re.escape(interface)}\s+\S+\s+\d+\s+\d+\s+\S*\s*(\d+(?:\.\d+)?)"
         else:
@@ -230,17 +117,19 @@ class OltHandler:
         if self.is_c600:
             iface_onu = f"gpon_onu-1/{target_ont.pon_port}/{target_ont.pon_slot}:{onu_id}"
         
-        context = { "interface_olt": base_iface, 
-        "interface_onu": iface_onu, 
-        "pon_slot": target_ont.pon_slot, 
-        "pon_port": target_ont.pon_port, 
-        "onu_id": onu_id, 
-        "sn": config_request.sn, 
-        "customer": config_request.customer, 
-        "vlan": vlan, "up_profile": up_paket, 
-        "down_profile": down_paket, 
-        "jenismodem": "ZTEG-F670" if config_request.modem_type in ["F670L"] else "ALL", 
-        "eth_locks": config_request.eth_locks }
+        context = { 
+            "interface_olt": base_iface, 
+            "interface_onu": iface_onu, 
+            "pon_slot": target_ont.pon_slot, 
+            "pon_port": target_ont.pon_port, 
+            "onu_id": onu_id, 
+            "sn": config_request.sn, 
+            "customer": config_request.customer, 
+            "vlan": vlan, "up_profile": up_paket, 
+            "down_profile": down_paket, 
+            "jenismodem": "ZTEG-F670" if config_request.modem_type in ["F670L"] else "ALL", 
+            "eth_locks": config_request.eth_locks 
+        }
         
         template_name = "config_c600.yaml" if self.is_c600 else "config_c300.yaml"
         
@@ -257,7 +146,8 @@ class OltHandler:
         
         for cmd in commands:
             logs.append(f"CMD > {cmd}")
-            output = await self._execute_command(cmd)
+            # FIX: Use self.execute_command
+            output = await self.execute_command(cmd)
             if output:
                 logs.append(f"LOG < {output}")
             await asyncio.sleep(0.1) 

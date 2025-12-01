@@ -1,84 +1,86 @@
 import asyncio
-import re
-import telnetlib3
+from fastapi import HTTPException
+from typing import Dict, Optional
+from services.core_handler import CoreHandler
+from core.config import settings
+from core.olt_config import OLT_OPTIONS
 import logging
-from typing import Optional
 
-class TelnetClient:
-    """
-    Base class that handles ONLY the raw Telnet connection, 
-    Login, and Command Execution.
-    """
-    def __init__(self, host: str, username: str, password: str, is_c600: bool):
-        self.host = host
-        self.username = username
-        self.password = password
-        self.is_c600 = is_c600
-        self.reader: Optional[telnetlib3.TelnetReader] = None
-        self.writer: Optional[telnetlib3.TelnetWriter] = None
-        self._prompt_re = re.compile(r"(.+[>#])\s*$")
-        self._pagination_prompt = "--More--"
+class TelnetHandler:
+    # 1. Define types here for Pylance
+    _instance: Optional["TelnetHandler"] = None
+    connections: Dict[str, CoreHandler]
+    locks: Dict[str, asyncio.Lock]
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(TelnetHandler, cls).__new__(cls)
+            # 2. Assign values here
+            cls._instance.connections = {}
+            cls._instance.locks = {}
+        return cls._instance
 
-    def is_connected(self) -> bool:
-        return self.writer is not None and not self.writer.is_closing()
+    def _get_lock(self, host: str):
+        if host not in self.locks:
+            self.locks[host] = asyncio.Lock()
+        return self.locks[host]
 
-    async def connect(self):
-        if self.is_connected():
-            return
+    @staticmethod
+    def get_olt_config_or_404(olt_name: str) -> dict:
+        # 1. Normalize input: specific keys in OLT_OPTIONS are UPPERCASE
+        key = olt_name.strip().upper()
         
-        logging.info(f"Connecting to {self.host}...")
-        try:
-            self.reader, self.writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, 23), timeout=20
+        # 2. Safe Lookup
+        olt_info = OLT_OPTIONS.get(key)
+        
+        # 3. Error Handling
+        if not olt_info:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"OLT Configuration for '{olt_name}' not found. Available: {list(OLT_OPTIONS.keys())}"
             )
-            await self._login()
-            await self._disable_pagination()
-        except Exception as e:
-            await self.close()
-            raise ConnectionError(f"Connection failed: {e}")
+            
+        return olt_info
 
-    async def close(self):
-        if self.writer:
+    async def execute_action(self, olt_info: dict, action_callback):
+        host = olt_info["ip"]
+        lock = self._get_lock(host)
+
+        # 1. Wait for your turn (Locking)
+        async with lock:
+            handler = self.connections.get(host)
+
+            # 2. Create Handler if it doesn't exist
+            if not handler:
+                handler = CoreHandler(
+                    host=olt_info["ip"],
+                    username=settings.OLT_USERNAME,
+                    password=settings.OLT_PASSWORD,
+                    is_c600=olt_info["c600"]
+                )
+                self.connections[host] = handler
+
+            # 3. Ensure Connected
             try:
-                self.writer.close()
-                await self.writer.wait_closed()
-            except Exception:
-                pass
-        self.writer = None
-        self.reader = None
+                await handler.connect()
+            except Exception as e:
+                await handler.close()
+                if host in self.connections:
+                    del self.connections[host]
+                raise e
 
-    async def _read_until_prompt(self, timeout: int = 20) -> str:
-        if not self.reader: raise ConnectionError("Not connected")
-        data = ""
-        while True:
-            chunk = await asyncio.wait_for(self.reader.read(1024), timeout=timeout)
-            if not chunk: break
-            data += chunk
-            if re.search(self._prompt_re, data): break
-            if self._pagination_prompt in data:
-                self.writer.write(" ")
-                await self.writer.drain()
-                data = data.replace(self._pagination_prompt, "")
-        return data
+            # 4. Run Command & Auto-Heal
+            try:
+                return await action_callback(handler)
+            except HTTPException as http_exc:
+                # Pass through HTTP exceptions (like 500 Reboot Failed)
+                raise http_exc 
+            except Exception as e:
+                # Catch unexpected Telnet errors
+                logging.error(f"OLT Action Failed: {e}")
+                # Optional: Force disconnect on critical failure
+                # await handler.close()
+                # if host in self.connections: del self.connections[host]
+                raise HTTPException(status_code=500, detail=f"OLT Error: {str(e)}")
 
-    async def _login(self, timeout: int = 20):
-        await asyncio.wait_for(self.reader.readuntil(b'Username:'), timeout)
-        self.writer.write(self.username + '\n')
-        await asyncio.wait_for(self.reader.readuntil(b'Password:'), timeout)
-        self.writer.write(self.password + '\n')
-        await self._read_until_prompt(timeout)
-
-    async def _disable_pagination(self):
-        await self.execute_command("terminal length 0")
-
-    async def execute_command(self, command: str, timeout: int = 20) -> str:
-        if not self.is_connected(): raise ConnectionResetError("Connection closed")
-        try:
-            self.writer.write(command + "\n")
-            await self.writer.drain()
-            raw = await self._read_until_prompt(timeout)
-            # Clean echo and prompt
-            lines = raw.splitlines()
-            return "\n".join([l for l in lines if command not in l and not re.search(self._prompt_re, l)])
-        except Exception:
-            raise ConnectionResetError(f"Lost connection to {self.host}")
+olt_manager = TelnetHandler()
