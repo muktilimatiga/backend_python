@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from schemas import onu_handler as schemas
-from services.olt_manager import olt_manager # <--- The Singleton we made
+from services.telnet_handler import olt_manager # <--- The Singleton we made
 from core.olt_config import OLT_OPTIONS
 from core.config import settings
 
