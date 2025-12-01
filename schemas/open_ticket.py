@@ -1,41 +1,65 @@
-from . import BaseModel, Optional, Field
+from . import BaseModel, Optional, Field, List, Dict
+from typing import Any
+
+# ==========================================
+# 1. PAYLOADS (INPUTS)
+# ==========================================
 
 
-class OpenTicketRequest(BaseModel):
+class TicketCreateOnlyPayload(BaseModel):
     query: str
     description: str
-    priority: Optional[str] = "LOW"
-    jenis: Optional[str] = "FREE"
-    headless: Optional[bool] = True
-    noc_username: Optional[str] = None
-    noc_password: Optional[str] = None
+    priority: str = "LOW"
+    jenis: str = "FREE"
 
-    process_immediately: bool = Field(default=True, description="Proses ticket by NOC")
-
-class OpenTicketResponse(BaseModel):
-    success: bool
-    message: str
-
-class ProcessTicketRequest(BaseModel):
+class TicketCreateAndProcessPayload(BaseModel):
     query: str
-    noc_username: Optional[str] = None
-    noc_password: Optional[str] = None
-    headless: Optional[bool] = True
+    description: str
+    priority: str = "LOW"
+    jenis: str = "FREE"
+    noc_username: str
+    noc_password: str
+
+class TicketProcessPayload(BaseModel):
+    query: str
+    noc_username: str
+    noc_password: str
 
 class TicketClosePayload(BaseModel):
-    close_reason: str
-    headless_mode: Optional[bool] = True
-    noc_user: str
-    noc_pass: str
     query: str
-    action_close_notes: Optional[str] = None
+    close_reason: str
+    onu_sn: str
+    noc_username: str
+    noc_password: str
 
-
-class ForwardTicketPayload(BaseModel):
+class TicketForwardPayload(BaseModel):
     query: str
     service_impact: str
     root_cause: str
     network_impact: str
     recomended_action: str
+    onu_index: str
+    sn_modem: str
+    priority: str = "HIGH"
+    person_in_charge: str = "ALL TECHNICIANS"
     noc_username: str
     noc_password: str
+    
+class SearchPayload(BaseModel):
+    query: str
+
+# ==========================================
+# 2. RESPONSES (OUTPUTS)
+# ==========================================
+
+# Unified Response for ALL Actions (Create, Process, Close, Forward)
+class TicketOperationResponse(BaseModel):
+    success: bool
+    message: str
+    creation_result: Optional[str] = None
+    processing_result: Optional[str] = None
+
+# Specific Response for Search (Returns Data)
+class SearchResponse(BaseModel):
+    query: str
+    results: List[Dict[str, Any]]

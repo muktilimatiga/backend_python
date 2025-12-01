@@ -18,8 +18,6 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from core.config import settings
-from .db_customer import get_customer_by_pppoe
-
 
 log = logging.getLogger("lexxa.selenium")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -78,21 +76,6 @@ def _set_value_js(driver, el, value: str):
         el.dispatchEvent(new Event('input', {bubbles:true}));
         el.dispatchEvent(new Event('change', {bubbles:true}));
     """, el, value)
-
-def get_costumer_name_by_pppoe(pppoe_user: str) -> str | None:
-    """
-    Finds a customer name by their PPPoE username from the PostgreSQL database.
-    This function now acts as a wrapper around the new database service.
-    """
-    log.info(f"[DB] Searching for customer with PPPoE: {pppoe_user}")
-    customer = get_customer_by_pppoe(pppoe_user) # <-- USE THE NEW FUNCTION
-
-    if customer and customer.get("name"):
-        log.info(f"[DB] Found customer name: '{customer['name']}'")
-        return customer["name"]
-
-    log.warning(f"[DB] No customer found with PPPoE '{pppoe_user}'")
-    return None
 
 def maybe_login(driver, base_url: str, username: str, password: str):
     log.info("Opening %s", base_url)
@@ -393,12 +376,12 @@ def create_ticket_as_cs(
             pass
 
 def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, headless: bool = True) -> str:
-
-
     driver = build_driver(headless)
     try:
+        # Use settings variable for consistency
         maybe_login_noc(driver, settings.TICKET_NOC_URL, noc_username, noc_password)
-        driver.get(TICKET_NOC_URL)
+        driver.get(settings.TICKET_NOC_URL)
+        
         log.info("[NOC] Waiting for ticket table to load...")
         try:
             WebDriverWait(driver, 30).until(
@@ -420,34 +403,21 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
         query_upper = query.upper().strip()
         
         rows = driver.find_elements(By.CSS_SELECTOR, "#tickets-note tbody tr")
-        log.info(f"[NOC] Found {len(rows)} rows, scanning for ticket '{query_upper}'...")
+        log.info(f"[NOC] Found {len(rows)} rows, scanning for ticket containing '{query_upper}'...")
 
         for row in rows:
             row_text = row.text.upper().strip()
+            # Check if text contains Query AND is in valid status
             if query_upper in row_text and ("FORWARD TO NOC" in row_text or "OPEN" in row_text):
                 ticket_row = row
                 log.info(f"[NOC] Found matching ticket row for '{query_upper}'.")
-                break
-
-        if not ticket_row:
-            # Try to find customer by name if PPPoE search fails
-            log.info(f"[NOC] Ticket not found by PPPoE '{query_upper}', trying to find customer name...")
-            customer_name = get_costumer_name_by_pppoe(query)
-            if customer_name:
-                customer_name_upper = customer_name.upper().strip()
-                log.info(f"[NOC] Found customer name: '{customer_name_upper}', searching again...")
-                
-                for row in rows:
-                    row_text = row.text.upper().strip()
-                    if customer_name_upper in row_text and ("FORWARD TO NOC" in row_text or "OPEN" in row_text):
-                        ticket_row = row
-                        log.info(f"[NOC] Found matching ticket row for customer name '{customer_name_upper}'.")
-                        break
+                break # Stop searching once found
             
-            if not ticket_row:
-                log.error(f"[NOC] Ticket '{query_upper}' with an actionable status was not found even after customer name lookup.")
-                driver.save_screenshot(f"log_{query}_02_ticket_not_found.png")
-                return f"Failed: [NOC] Could not find ticket '{query_upper}'."
+        # --- FIX: This check must be OUTSIDE the for loop ---
+        if not ticket_row:
+            log.error(f"[NOC] Ticket '{query_upper}' with an actionable status was not found.")
+            driver.save_screenshot(f"log_{query}_02_ticket_not_found.png")
+            return f"Failed: [NOC] Could not find actionable ticket for '{query_upper}'."
 
         # --- Screenshot 2: Row found and scrolled into view ---
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", ticket_row)
@@ -462,9 +432,8 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
             log.info("[NOC] Clicked the action dropdown toggle.")
 
             # --- Screenshot 3: Dropdown is open ---
-            time.sleep(1) # Allow dropdown to render
+            time.sleep(1) 
             driver.save_screenshot(f"log_{query}_03_dropdown_opened.png")
-            log.info(f"Saved screenshot: log_{query}_03_dropdown_opened.png")
 
             details_link_locator = (By.CSS_SELECTOR, "a[data-target*='create_ticket_modal']")
             details_link = WebDriverWait(driver, 10).until(
@@ -486,15 +455,13 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
             
             # --- Screenshot 4: Modal is visible ---
             driver.save_screenshot(f"log_{query}_04_modal_visible.png")
-            log.info(f"Saved screenshot: log_{query}_04_modal_visible.png")
-
+            
             action_field = modal.find_element(By.NAME, "action_ticket")
             action_field.clear()
             action_field.send_keys("cek")
 
             # --- Screenshot 5: Text entered in modal ---
             driver.save_screenshot(f"log_{query}_05_modal_filled.png")
-            log.info(f"Saved screenshot: log_{query}_05_modal_filled.png")
 
             save_button = modal.find_element(By.NAME, "proses_ticket")
             driver.execute_script("arguments[0].click();", save_button)
@@ -506,8 +473,6 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
             # --- Screenshot 6: Modal has closed ---
             time.sleep(1)
             driver.save_screenshot(f"log_{query}_06_modal_closed.png")
-            log.info(f"Saved screenshot: log_{query}_06_modal_closed.png")
-
 
         except (NoSuchElementException, TimeoutException) as e:
             log.error(f"[NOC] Failed to interact with the modal elements: {e}")
@@ -525,7 +490,7 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
         log.info("[NOC] Automation finished. Closing browser.")
         if 'driver' in locals() and driver:
             driver.quit()
-
+            
 def close_ticket_as_noc(
     noc_username: str,
     noc_password: str,

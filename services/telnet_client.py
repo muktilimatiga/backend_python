@@ -1,84 +1,89 @@
 import asyncio
-import re
-import telnetlib3
 import logging
-from typing import Optional
+import telnetlib3
+from core.config import settings
 
 class TelnetClient:
-    """
-    Base class that handles ONLY the raw Telnet connection, 
-    Login, and Command Execution.
-    """
-    def __init__(self, host: str, username: str, password: str, is_c600: bool):
+    def __init__(self, host: str, username: str, password: str, is_c600: bool = False):
         self.host = host
         self.username = username
         self.password = password
         self.is_c600 = is_c600
-        self.reader: Optional[telnetlib3.TelnetReader] = None
-        self.writer: Optional[telnetlib3.TelnetWriter] = None
-        self._prompt_re = re.compile(r"(.+[>#])\s*$")
-        self._pagination_prompt = "--More--"
-
-    def is_connected(self) -> bool:
-        return self.writer is not None and not self.writer.is_closing()
+        self.reader = None
+        self.writer = None
+        self.connected = False
 
     async def connect(self):
-        if self.is_connected():
+        if self.connected:
             return
-        
-        logging.info(f"Connecting to {self.host}...")
+
         try:
+            # Use configured timeout or default to 15
+            timeout = settings.TELNET_TIMEOUT if hasattr(settings, 'TELNET_TIMEOUT') else 15
+            
             self.reader, self.writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, 23), timeout=20
+                telnetlib3.open_connection(self.host, 23, encoding='ascii'), 
+                timeout=timeout
             )
-            await self._login()
-            await self._disable_pagination()
+            
+            # Login Flow
+            await self.read_until(["Username:", "Login:", "login:"], timeout)
+            self.writer.write(self.username + "\n")
+            
+            await self.read_until(["Password:", "password:"], timeout)
+            self.writer.write(self.password + "\n")
+            
+            await self.read_until([">", "#"], timeout)
+            
+            # Disable paging
+            self.writer.write("terminal length 0\n")
+            await self.read_until([">", "#"], timeout)
+            
+            self.connected = True
+            logging.info(f"Connected to {self.host}")
+
         except Exception as e:
-            await self.close()
-            raise ConnectionError(f"Connection failed: {e}")
+            logging.error(f"Failed to connect to {self.host}: {e}")
+            self.connected = False
+            raise ConnectionError(f"Telnet connection failed: {e}")
+
+    async def execute_command(self, cmd: str) -> str:
+        if not self.connected or not self.writer:
+            await self.connect()
+
+        try:
+            self.writer.write(cmd + "\n")
+            timeout = settings.TELNET_TIMEOUT if hasattr(settings, 'TELNET_TIMEOUT') else 15
+            output = await self.read_until([">", "#"], timeout=timeout)
+            return output
+        except Exception as e:
+            logging.error(f"Error executing command '{cmd}': {e}")
+            self.connected = False
+            raise
+
+    async def read_until(self, expected_list, timeout=5):
+        if isinstance(expected_list, str):
+            expected_list = [expected_list]
+            
+        buffer = ""
+        try:
+            while True:
+                data = await asyncio.wait_for(self.reader.read(1024), timeout=timeout)
+                if not data:
+                    break
+                buffer += data
+                for exp in expected_list:
+                    if exp in buffer:
+                        return buffer
+        except asyncio.TimeoutError:
+            return buffer
+        return buffer
 
     async def close(self):
         if self.writer:
             try:
                 self.writer.close()
-                await self.writer.wait_closed()
             except Exception:
                 pass
-        self.writer = None
-        self.reader = None
-
-    async def _read_until_prompt(self, timeout: int = 20) -> str:
-        if not self.reader: raise ConnectionError("Not connected")
-        data = ""
-        while True:
-            chunk = await asyncio.wait_for(self.reader.read(1024), timeout=timeout)
-            if not chunk: break
-            data += chunk
-            if re.search(self._prompt_re, data): break
-            if self._pagination_prompt in data:
-                self.writer.write(" ")
-                await self.writer.drain()
-                data = data.replace(self._pagination_prompt, "")
-        return data
-
-    async def _login(self, timeout: int = 20):
-        await asyncio.wait_for(self.reader.readuntil(b'Username:'), timeout)
-        self.writer.write(self.username + '\n')
-        await asyncio.wait_for(self.reader.readuntil(b'Password:'), timeout)
-        self.writer.write(self.password + '\n')
-        await self._read_until_prompt(timeout)
-
-    async def _disable_pagination(self):
-        await self.execute_command("terminal length 0")
-
-    async def execute_command(self, command: str, timeout: int = 20) -> str:
-        if not self.is_connected(): raise ConnectionResetError("Connection closed")
-        try:
-            self.writer.write(command + "\n")
-            await self.writer.drain()
-            raw = await self._read_until_prompt(timeout)
-            # Clean echo and prompt
-            lines = raw.splitlines()
-            return "\n".join([l for l in lines if command not in l and not re.search(self._prompt_re, l)])
-        except Exception:
-            raise ConnectionResetError(f"Lost connection to {self.host}")
+        self.connected = False
+        logging.info(f"Disconnected from {self.host}")
