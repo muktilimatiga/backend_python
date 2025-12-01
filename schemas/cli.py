@@ -1,16 +1,16 @@
-from . import BaseModel, List
+from typing import List, Dict
+from pydantic import BaseModel
 
-class TerminalResponse(BaseModel):
-    port: int
-    pid: int
-    command: str
-    message: str
+# --- 1. Session Manager ---
 
-class StopResponse(BaseModel):
-    port: int
-    pid: int
-    message: str
-
-class ListResponse(BaseModel):
+class SessionListResponse(BaseModel):
     count: int
-    running_ports: List[int]
+    sessions: List[Dict[str, int]]
+
+class KillResponse(BaseModel):
+    pid: int
+    message: str
+
+# [NEW] Payload for sending commands
+class CommandPayload(BaseModel):
+    command: str
