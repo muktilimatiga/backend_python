@@ -1,12 +1,12 @@
 import asyncio
 from typing import Dict, Optional
-from services.telnet_client import TelnetHandler
+from services.telnet_client import TelnetClient
 from core.config import settings
 from fastapi import HTTPException
 
 class OLTConnectionManager:
     _instance: Optional["OLTConnectionManager"] = None
-    connections: Dict[str, OLTConnectionManager]
+    connections: Dict[str, TelnetClient]
     locks: Dict[str, asyncio.Lock]
     
     def __new__(cls):

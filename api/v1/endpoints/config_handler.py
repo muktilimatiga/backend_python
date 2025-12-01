@@ -10,6 +10,7 @@ from schemas.config_handler import (
     ConfigurationSummary, OptionsResponse, OnuDetail
 )
 from services.config_handler import OltHandler
+from services.telnet_handler import olt_manager
 from core.olt_config import OLT_OPTIONS, MODEM_OPTIONS, PACKAGE_OPTIONS
 
 router = APIRouter()

@@ -29,7 +29,7 @@ class BillingSummary(BaseModel):
     last_paid_month: Optional[str] = None
 
 class CustomerwithInvoices(Customer):
-    invoices: List[InvoiceItem] = []
+    invoices: List[BillingSummary] = None
 
     class Config:
         from_attributes = True
