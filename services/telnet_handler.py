@@ -1,15 +1,18 @@
 import asyncio
 from fastapi import HTTPException
-from typing import Dict, Optional
-from services.core_handler import CoreHandler
+from typing import Dict, Optional, TYPE_CHECKING
 from core.config import settings
 from core.olt_config import OLT_OPTIONS
 import logging
 
+# [FIX] Use TYPE_CHECKING to avoid runtime circular import
+if TYPE_CHECKING:
+    from services.core_handler import CoreHandler
+
 class TelnetHandler:
     # 1. Define types here for Pylance
     _instance: Optional["TelnetHandler"] = None
-    connections: Dict[str, CoreHandler]
+    connections: Dict[str, "CoreHandler"] # [FIX] Use string forward reference
     locks: Dict[str, asyncio.Lock]
     
     def __new__(cls):
@@ -52,6 +55,9 @@ class TelnetHandler:
 
             # 2. Create Handler if it doesn't exist
             if not handler:
+                # [FIX] Import CoreHandler HERE to break the circular dependency
+                from services.core_handler import CoreHandler 
+                
                 handler = CoreHandler(
                     host=olt_info["ip"],
                     username=settings.OLT_USERNAME,

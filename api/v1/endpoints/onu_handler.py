@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from schemas import onu_handler as schemas
-from services.telnet_client import olt_manager
+from services.telnet_handler import olt_manager
 from core.olt_config import OLT_OPTIONS
 
 router = APIRouter()

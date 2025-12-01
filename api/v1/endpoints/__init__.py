@@ -7,7 +7,7 @@ from core.config import settings
 import httpx
 import logging
 from fastapi import APIRouter, HTTPException
-from schemas.open_ticket import OpenTicketRequest, TicketClosePayload, ForwardTicketPayload, ProcessTicketRequest
+from schemas.open_ticket import TicketClosePayload
 from services.open_ticket import (
     create_ticket_as_cs,
     process_ticket_as_noc,

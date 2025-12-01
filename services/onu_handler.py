@@ -3,11 +3,11 @@
 import logging
 import re
 from typing import Dict, Any, List
-from services.telnet_client import TelnetClient  # <--- Import Base
+from services.telnet_handler import TelnetHandler  # <--- Import Base
 
 logging.basicConfig(level=logging.INFO)
 
-class OnuHandler(TelnetClient):  # <--- Inherits connection logic
+class OnuHandler(TelnetHandler):  # <--- Inherits connection logic
     """
     Handles ONU-specific logic.
     Connection, Login, and Execution are handled by TelnetClient.
