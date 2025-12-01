@@ -1,17 +1,21 @@
+# services/onu_handler.py
+
 import logging
 import re
 from typing import Dict, Any, List
-from services.telnet_client import TelnetClient  # <--- Import the Base Class
+from services.telnet_client import TelnetClient  # <--- Import Base
 
 logging.basicConfig(level=logging.INFO)
 
-class OnuHandler(TelnetClient):  # <--- Inherit from TelnetClient
+class OnuHandler(TelnetClient):  # <--- Inherits connection logic
     """
-    Handles ONU-specific logic (parsing details, rebooting, etc.).
-    Inherits connection and execution logic from TelnetClient.
+    Handles ONU-specific logic.
+    Connection, Login, and Execution are handled by TelnetClient.
     """
 
-    # Data Parser
+    # =================================================================
+    # DATA PARSERS (Static Methods)
+    # =================================================================
     @staticmethod
     def _parse_onu_detail_output(raw_output: str) -> Dict[str, Any]:
         kv_regex = re.compile(r'^\s*([^:]+?):\s+(.*?)\s*$')
@@ -75,13 +79,15 @@ class OnuHandler(TelnetClient):  # <--- Inherit from TelnetClient
             })
         return results
 
-    
+    # =================================================================
+    # BUSINESS LOGIC METHODS
+    # =================================================================
 
     async def get_onu_detail(self, interface: str) -> Dict[str, Any]:
         logging.info(f"Fetching ONU detail for interface: {interface}")
         cmd = f"show gpon onu detail-info {interface}"
         
-        # Use parent method: self.execute_command
+        # Call the PARENT class method
         raw_output = await self.execute_command(cmd)
 
         if not raw_output or "No related information" in raw_output:
@@ -117,7 +123,6 @@ class OnuHandler(TelnetClient):  # <--- Inherit from TelnetClient
         return raw_output
 
     async def get_eth_port_statuses(self, interface: str) -> List[Dict]:
-        # Expects "1/2/3:4" (interface string without prefix)
         prefix = "gpon_onu-" if self.is_c600 else "gpon-onu_"
         interface_cmd = f"{prefix}{interface}"
         cmd = f"show gpon remote-onu interface eth {interface_cmd}"
@@ -132,7 +137,6 @@ class OnuHandler(TelnetClient):  # <--- Inherit from TelnetClient
 
     async def get_onu_ip_host(self, interface_onu: str, interface: str = None) -> str:
         cmd = f"show gpon remote-onu ip-host {interface_onu}"
-        
         try:
             raw_output = await self.execute_command(cmd)
             if "No related information" in raw_output:
