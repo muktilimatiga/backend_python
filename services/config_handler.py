@@ -5,8 +5,7 @@ import logging
 from jinja2 import Environment, FileSystemLoader
 from core.olt_config import PACKAGE_OPTIONS
 from schemas.config_handler import UnconfiguredOnt, ConfigurationRequest
-from services.telnet_handler import TelnetHandler # <--- Import Base
-
+from services.telnet_client import TelnetClient
 # --- Jinja2 Environment ---
 try:
     jinja_env = Environment(loader=FileSystemLoader('templates'), trim_blocks=True, lstrip_blocks=True)
@@ -14,7 +13,7 @@ except Exception as e:
     logging.error(f"[FATAL ERROR] Tidak dapat memuat folder 'templates' Jinja2: {e}")
     jinja_env = None
 
-class OltHandler(TelnetHandler): # <--- Inherit from TelnetClient
+class OltHandler(TelnetClient): # <--- Inherit from TelnetClient
     
     async def find_unconfigured_onts(self) -> list[UnconfiguredOnt]:
         command = "show pon onu uncfg" if self.is_c600 else "show gpon onu uncfg"
