@@ -1,24 +1,22 @@
 import asyncio
-from fastapi import HTTPException
+import logging
 from typing import Dict, Optional, TYPE_CHECKING
+from fastapi import HTTPException
 from core.config import settings
 from core.olt_config import OLT_OPTIONS
-import logging
 
-# [FIX] Use TYPE_CHECKING to avoid runtime circular import
+# [CRITICAL] NO imports of CoreHandler/TelnetClient at top level
 if TYPE_CHECKING:
     from services.core_handler import CoreHandler
 
 class TelnetHandler:
-    # 1. Define types here for Pylance
     _instance: Optional["TelnetHandler"] = None
-    connections: Dict[str, "CoreHandler"] # [FIX] Use string forward reference
+    connections: Dict[str, "CoreHandler"]
     locks: Dict[str, asyncio.Lock]
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(TelnetHandler, cls).__new__(cls)
-            # 2. Assign values here
             cls._instance.connections = {}
             cls._instance.locks = {}
         return cls._instance
@@ -30,63 +28,44 @@ class TelnetHandler:
 
     @staticmethod
     def get_olt_config_or_404(olt_name: str) -> dict:
-        # 1. Normalize input: specific keys in OLT_OPTIONS are UPPERCASE
-        key = olt_name.strip().upper()
-        
-        # 2. Safe Lookup
-        olt_info = OLT_OPTIONS.get(key)
-        
-        # 3. Error Handling
-        if not olt_info:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"OLT Configuration for '{olt_name}' not found. Available: {list(OLT_OPTIONS.keys())}"
-            )
-            
-        return olt_info
+        info = OLT_OPTIONS.get(olt_name.strip().upper())
+        if not info:
+            raise HTTPException(404, detail=f"OLT '{olt_name}' not found.")
+        return info
 
     async def execute_action(self, olt_info: dict, action_callback):
         host = olt_info["ip"]
         lock = self._get_lock(host)
 
-        # 1. Wait for your turn (Locking)
         async with lock:
             handler = self.connections.get(host)
 
-            # 2. Create Handler if it doesn't exist
             if not handler:
-                # [FIX] Import CoreHandler HERE to break the circular dependency
-                from services.core_handler import CoreHandler 
+                # [CRITICAL] Lazy import inside method
+                from services.core_handler import CoreHandler
                 
+                # [CRITICAL] Pass arguments required by TelnetClient.__init__
                 handler = CoreHandler(
-                    host=olt_info["ip"],
+                    host=host,
                     username=settings.OLT_USERNAME,
                     password=settings.OLT_PASSWORD,
-                    is_c600=olt_info["c600"]
+                    is_c600=olt_info.get("c600", False)
                 )
                 self.connections[host] = handler
 
-            # 3. Ensure Connected
             try:
                 await handler.connect()
             except Exception as e:
                 await handler.close()
-                if host in self.connections:
-                    del self.connections[host]
+                if host in self.connections: del self.connections[host]
                 raise e
 
-            # 4. Run Command & Auto-Heal
             try:
                 return await action_callback(handler)
-            except HTTPException as http_exc:
-                # Pass through HTTP exceptions (like 500 Reboot Failed)
-                raise http_exc 
             except Exception as e:
-                # Catch unexpected Telnet errors
+                if isinstance(e, HTTPException): raise e
                 logging.error(f"OLT Action Failed: {e}")
-                # Optional: Force disconnect on critical failure
-                # await handler.close()
-                # if host in self.connections: del self.connections[host]
                 raise HTTPException(status_code=500, detail=f"OLT Error: {str(e)}")
 
+# This is the object your endpoints use
 olt_manager = TelnetHandler()
