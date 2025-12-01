@@ -1,177 +1,185 @@
+import os
+import pty
+import select
+import struct
+import fcntl
+import termios
 import asyncio
-import socket
 import logging
-from fastapi import APIRouter, HTTPException, status
-from typing import Dict
-from schemas.cli import TerminalResponse, StopResponse, ListResponse
+import signal
+from typing import Dict, List
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
+from starlette.websockets import WebSocketState
 
-logger = logging.getLogger(__name__)
-
-
-# --- App Setup ---
 router = APIRouter()
+logger = logging.getLogger("lexxa.cli")
 
-MAX_TERMINALS = 10  # Limit the number of concurrent terminals
-running_terminals: Dict[int, asyncio.subprocess.Process] = {}
+# --- 1. Session Manager ---
+class TerminalSession:
+    def __init__(self, pid: int, master_fd: int):
+        self.pid = pid
+        self.master_fd = master_fd
+        self.websocket: WebSocket = None
 
-# --- Helper Functions ---
-def get_free_port() -> int:
-    """
-    Finds and returns a free TCP port.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))  # 0 tells the OS to pick a random free port
-        s.listen(1)
-        port = s.getsockname()[1]
-    return port
+class SessionManager:
+    def __init__(self):
+        self.active_sessions: Dict[int, TerminalSession] = {}
 
+    def register(self, pid: int, master_fd: int, websocket: WebSocket):
+        session = TerminalSession(pid, master_fd)
+        session.websocket = websocket
+        self.active_sessions[pid] = session
+        logger.info(f"Terminal session registered: PID {pid}")
 
-async def cleanup_dead_processes():
-    """
-    Removes any processes that have exited from the running_terminals dict.
-    """
-    ports_to_remove = []
-    for port, process in running_terminals.items():
-        if process.returncode is not None:
-            logger.info(f"Removing dead ttyd process on port {port} (PID {process.pid})")
-            ports_to_remove.append(port)
+    def unregister(self, pid: int):
+        if pid in self.active_sessions:
+            del self.active_sessions[pid]
+            logger.info(f"Terminal session unregistered: PID {pid}")
 
-    for port in ports_to_remove:
-        del running_terminals[port]
+    async def kill_session(self, pid: int):
+        if pid in self.active_sessions:
+            session = self.active_sessions[pid]
+            try:
+                if session.websocket.client_state == WebSocketState.CONNECTED:
+                    await session.websocket.close()
+            except Exception as e:
+                logger.warning(f"Error closing socket for PID {pid}: {e}")
+            
+            try:
+                os.kill(pid, signal.SIGTERM)
+                try:
+                    os.close(session.master_fd)
+                except OSError:
+                    pass
+            except Exception as e:
+                logger.warning(f"Error killing process PID {pid}: {e}")
+            
+            self.unregister(pid)
+            return True
+        return False
 
+    def list_sessions(self):
+        return [
+            {"pid": pid, "status": "active"} 
+            for pid in self.active_sessions.keys()
+        ]
 
-def check_ttyd_available() -> bool:
-    """
-    Checks if ttyd command is available in the system PATH.
-    """
-    import shutil
-    return shutil.which("ttyd") is not None
+manager = SessionManager()
 
+# --- 2. API Schemas ---
+class SessionListResponse(BaseModel):
+    count: int
+    sessions: List[Dict[str, int]]
 
-# --- API Endpoints ---
+class KillResponse(BaseModel):
+    pid: int
+    message: str
 
-@router.post("/start_terminal", response_model=TerminalResponse, status_code=status.HTTP_201_CREATED)
-async def start_terminal():
-    """
-    Starts a new ttyd session on a random free port.
-    The terminal will run the 'bash' command.
-    """
-    # Check if ttyd is available
-    if not check_ttyd_available():
-        logger.error("ttyd command not found")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error: 'ttyd' command not found. Is it installed and in your system's PATH?"
-        )
+# --- 3. HTTP Management Endpoints ---
 
-    # Clean up any dead processes
-    await cleanup_dead_processes()
+@router.get("/sessions", response_model=SessionListResponse)
+async def list_active_terminals():
+    sessions = manager.list_sessions()
+    return {
+        "count": len(sessions),
+        "sessions": sessions
+    }
 
-    # Check if we've reached the maximum number of terminals
-    if len(running_terminals) >= MAX_TERMINALS:
-        logger.warning(f"Maximum terminals reached ({MAX_TERMINALS})")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Maximum number of terminals ({MAX_TERMINALS}) reached. Stop some terminals before starting new ones."
-        )
+@router.delete("/sessions/{pid}", response_model=KillResponse)
+async def kill_terminal(pid: int):
+    success = await manager.kill_session(pid)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Session with PID {pid} not found")
+    return {"pid": pid, "message": "Terminated successfully"}
 
-    port = get_free_port()
-    command_to_run = "bash"  # You can change this to 'zsh', 'tmux', etc.
+# --- 4. WebSocket Endpoint ---
 
-    ttyd_command = [
-        "ttyd",
-        "-p", str(port),   # Assign the free port
-        "-W",              # Allow write access to the terminal
-        command_to_run
-    ]
+@router.websocket("/ws")
+async def terminal_websocket(websocket: WebSocket):
+    await websocket.accept()
+    
+    master_fd, slave_fd = pty.openpty()
+    pid = os.fork()
 
-    try:
-        logger.info(f"Starting ttyd on port {port} with command: {' '.join(ttyd_command)}")
-
-        # Start the ttyd process in the background
-        # Redirect stdout and stderr to avoid blocking
-        process = await asyncio.create_subprocess_exec(
-            *ttyd_command,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-
-        # Store the process object
-        running_terminals[port] = process
-
-        logger.info(f"ttyd session started on port {port}, PID: {process.pid}")
-
-        return {
-            "port": port,
-            "pid": process.pid,
-            "command": " ".join(ttyd_command),
-            "message": f"ttyd session started on port {port}. PID: {process.pid}"
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to start ttyd on port {port}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
-        )
-
-
-@router.post("/stop_terminal/{port}", response_model=StopResponse)
-async def stop_terminal(port: int):
-    """
-    Stops a running ttyd session by its port number.
-    """
-    if port not in running_terminals:
-        logger.warning(f"Attempted to stop non-existent terminal on port {port}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No ttyd session found running on port {port}."
-        )
-
-    process = running_terminals[port]
-    pid = process.pid
-
-    try:
-        logger.info(f"Stopping ttyd process on port {port}, PID: {pid}")
-        process.terminate()  # Send SIGTERM
+    if pid == 0:
+        # --- CHILD (Shell) ---
+        os.setsid()
+        os.dup2(slave_fd, 0)
+        os.dup2(slave_fd, 1)
+        os.dup2(slave_fd, 2)
+        if master_fd > 2:
+            os.close(master_fd)
+        if slave_fd > 2:
+            os.close(slave_fd)
+        
+        # Use a compatible terminal type
+        os.environ["TERM"] = "xterm"
+        # Run bash (or sh/zsh depending on availability)
+        shell = os.environ.get("SHELL", "/bin/bash")
+        os.execvp(shell, [shell])
+    
+    else:
+        # --- PARENT (FastAPI) ---
+        os.close(slave_fd)
+        manager.register(pid, master_fd, websocket)
 
         try:
-            # Wait for up to 5 seconds for graceful shutdown
-            await asyncio.wait_for(process.wait(), timeout=5.0)
-            logger.info(f"ttyd process on port {port} stopped gracefully")
-        except asyncio.TimeoutError:
-            logger.warning(f"ttyd process on port {port} did not stop gracefully, killing")
-            process.kill()
-            await process.wait()
-            logger.info(f"ttyd process on port {port} was killed")
+            loop = asyncio.get_running_loop()
 
-        # Clean up
-        del running_terminals[port]
+            async def read_from_pty():
+                """Reads output from the shell and sends it to the websocket."""
+                while True:
+                    await asyncio.sleep(0.01)
+                    if pid not in manager.active_sessions:
+                        break
+                    try:
+                        r, _, _ = select.select([master_fd], [], [], 0)
+                        if master_fd in r:
+                            data = os.read(master_fd, 10240)
+                            if not data:
+                                break
+                            await websocket.send_text(data.decode("utf-8", "ignore"))
+                    except OSError:
+                        break
 
-        return {
-            "port": port,
-            "pid": pid,
-            "message": "Terminal session stopped successfully."
-        }
-    except Exception as e:
-        logger.error(f"Error stopping terminal on port {port}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error stopping terminal on port {port}: {str(e)}"
-        )
+            async def write_to_pty():
+                """Reads input from the websocket and writes it to the shell."""
+                while True:
+                    data = await websocket.receive_text()
+                    
+                    if pid not in manager.active_sessions:
+                        break
 
+                    # 1. Handle Window Resize (JSON)
+                    if data.strip().startswith("{") and '"cols":' in data:
+                        try:
+                            import json
+                            resize = json.loads(data)
+                            winsize = struct.pack("HHHH", resize.get("rows", 24), resize.get("cols", 80), 0, 0)
+                            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                            continue
+                        except:
+                            pass
+                    
+                    # 2. Handle Newlines
+                    # Ensure standard "Enter" key (\r) is sent
+                    if "\n" in data:
+                        data = data.replace("\n", "\r")
 
-@router.get("/running_terminals", response_model=ListResponse)
-async def list_running_terminals():
-    """
-    Lists all ttyd sessions started by this API.
-    """
-    # Clean up any dead processes
-    await cleanup_dead_processes()
+                    # 3. [FIX] Smart Enter:
+                    # If user sends a command string (len > 1) without an Enter key, add it automatically.
+                    # This fixes the "nothing happened" issue with raw test tools.
+                    if len(data) > 1 and "\r" not in data:
+                        data += "\r"
 
-    logger.debug(f"Listing {len(running_terminals)} running terminals: {list(running_terminals.keys())}")
+                    os.write(master_fd, data.encode())
 
-    return {
-        "count": len(running_terminals),
-        "running_ports": list(running_terminals.keys())
-    }
+            await asyncio.gather(read_from_pty(), write_to_pty())
+
+        except (WebSocketDisconnect, OSError):
+            logger.info(f"WebSocket disconnected for PID {pid}")
+        except Exception as e:
+            logger.error(f"Error in terminal session PID {pid}: {e}")
+        finally:
+            await manager.kill_session(pid)
