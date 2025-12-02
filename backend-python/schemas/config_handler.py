@@ -1,7 +1,7 @@
 #schemas/config.py
 
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 class UnconfiguredOnt(BaseModel):
     sn: str
@@ -14,7 +14,7 @@ class CustomerInfo(BaseModel):
     pppoe_user: str
     pppoe_pass: str
 
-class ConfigurationRequest(BaseModel):
+class ConfigurationRequest(CustomerInfo):
     sn: str
     customer: CustomerInfo
     modem_type: str
@@ -36,6 +36,19 @@ class OptionsResponse(BaseModel):
     olt_options: List[str]
     modem_options: List[str]
     package_options: List[str]
+
+class ConfigurationBridgeRequest(BaseModel):
+    sn: str
+    customer: CustomerInfo
+    modem_type: str
+    package: str
+    vlan: str
+
+
+class CongigurationBridgeResponse(BaseModel):
+    olt_name: str
+    modem_options: str
+    package_options: str
 
 # --- SCHEMA BARU UNTUK ONU DETAIL ---
 
@@ -61,3 +74,10 @@ class OnuDetail(BaseModel):
     
     # Log modem terakhir
     modem_logs: List[OnuLogEntry] = []
+
+class BatchConfigurationRequest(BaseModel):
+    configs: List[ConfigurationRequest]
+
+class BatchConfigResult(BaseModel):
+    success: List[ConfigurationSummary]
+    failed: List[Dict[str, Any]]
