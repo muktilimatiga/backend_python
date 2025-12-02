@@ -174,7 +174,7 @@ class OltHandler(TelnetClient): # <--- Inherit from TelnetClient
         return logs, summary
     
 
-async def config_bridge(self, config_request: ConfigurationBridgeRequests):
+async def config_bridge(self, config_request: ConfigurationBridgeRequest):
         # 1. Find the ONT
         ont_list = await self.find_unconfigured_onts()
         target_ont = next((ont for ont in ont_list if ont.sn == config_request.sn), None)
