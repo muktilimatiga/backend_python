@@ -110,7 +110,7 @@ class OltHandler(TelnetClient): # <--- Inherit from TelnetClient
         onu_id = await self.find_next_available_onu_id(base_iface)
         rate = await self.get_dba_rate(base_iface)
         up_profile_suffix = "-MBW" if rate > 75.0 else "-FIX"
-        base_paket_name = PACKAGE_OPTIONS[config_request.package]
+        base_paket_name = PACKAGE_OPTIONS[config_request.paket]
         up_paket = f"{base_paket_name}{up_profile_suffix}"
         down_paket = base_paket_name.replace("MB", "M")
         iface_onu = f"{'gpon_onu-1' if self.is_c600 else 'gpon-onu_1'}/{target_ont.pon_slot}/{target_ont.pon_port}:{onu_id}"
@@ -202,7 +202,7 @@ async def config_bridge(self, config_request: ConfigurationBridgeRequest):
             "sn": config_request.sn, 
             "customer": config_request.customer, 
             "vlan": config_request.vlan,
-            "package": config_request.package,
+            "package": config_request.paket,
             "jenismodem": "ZTEG-F670" if config_request.modem_type in ["F670L"] else "ALL",
         }
 

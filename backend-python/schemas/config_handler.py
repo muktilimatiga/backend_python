@@ -18,7 +18,7 @@ class ConfigurationRequest(CustomerInfo):
     sn: str
     customer: CustomerInfo
     modem_type: str
-    package: str
+    paket: str
     eth_locks: List[bool]
 
 class ConfigurationSummary(BaseModel):
@@ -41,7 +41,7 @@ class ConfigurationBridgeRequest(BaseModel):
     sn: str
     customer: CustomerInfo
     modem_type: str
-    package: str
+    paket: str
     vlan: str
 
 
