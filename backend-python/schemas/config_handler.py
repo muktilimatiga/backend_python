@@ -14,11 +14,11 @@ class CustomerInfo(BaseModel):
     pppoe_user: str
     pppoe_pass: str
 
-class ConfigurationRequest(CustomerInfo):
+class ConfigurationRequest(BaseModel):
     sn: str
     customer: CustomerInfo
-    modem_type: str
     package: str
+    modem_type: str
     eth_locks: List[bool]
 
 class ConfigurationSummary(BaseModel):

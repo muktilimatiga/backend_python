@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 from api.v1.endpoints import (
-    cli, customer_scrapper, open_ticket, config_handler,
-    onu_handler
+    cli, customer_scrapper, open_ticket, telnet
 )
 
 api_router = APIRouter()
@@ -28,14 +27,14 @@ api_router.include_router(
 
 #Handle Config
 api_router.include_router(
-    config_handler.router,
+    telnet.router,
     prefix="/config",
     tags=["Config"],
 )
 
 #Handle ONU 
 api_router.include_router(
-    onu_handler.router,
+    telnet.router,
     prefix="/onu",
     tags=["ONU"],
 )

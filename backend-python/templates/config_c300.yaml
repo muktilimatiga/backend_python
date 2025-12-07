@@ -1,25 +1,24 @@
-# Template for ZTE C600 Series
+# Template for ZTE C300 Series
 - "configure terminal"
 - "interface {{ interface_olt }}"
-- "onu {{ onu_id }} type {{ customer.modem_type }} sn {{ sn }}"
+- "onu {{ onu_id }} type {{ jenismodem }} sn {{ sn }}"
 - "exit"
 - "interface {{ interface_onu }}"
-- "name {{ customer.nama }}"
+- "name {{ customer.name }}"
 - "description {{ customer.address }}"
-- "tcont 1 name PPPOE profile {{ up_profile }}"
-- "gemport 1 name PPPOE tcont 1"
+- "tcont 1 name PPPOE profile UP-{{ up_profile }}"
+- "gemport 1 name CIGNAL tcont 1"
 - "service-port 1 vport 1 user-vlan {{ vlan }} vlan {{ vlan }}"
-- "gemport 1 traffic-limit downstream{{ down_profile }} direction egress"
+- "gemport 1 traffic-limit downstream DOWN-{{ down_profile }}"
 - "exit"
 - "pon-onu-mng {{ interface_onu }}"
 - "service CIGNAL gemport 1 vlan {{ vlan }}"
 - "wan-ip 1 mode pppoe username {{ customer.pppoe_user }} password {{ customer.pppoe_pass }} vlan-profile vlan{{ vlan }} host 1"
 - "security-mgmt 2 ingress-type wan mode forward state enable protocol web"
-- "exit"
 
 # Loop for Ethernet port states
 {% for i in range(eth_locks|length) %}
-- "int eth eth_0/{{ i + 1 }} sta {% if eth_locks[i] %}lock{% else %}unlock{% endif %}"
+- "interface eth eth_0/{{ loop.index }} state {{ 'lock' if is_locked else 'unlock' }}"
 {% endfor %}
 
 - "exit"
