@@ -23,6 +23,7 @@ class ConfigurationRequest(BaseModel):
 
 class ConfigurationSummary(BaseModel):
     serial_number: str
+    name: str
     pppoe_user: str
     location: str
     profile: str
