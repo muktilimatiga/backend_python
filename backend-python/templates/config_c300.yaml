@@ -17,8 +17,8 @@
 - "security-mgmt 2 ingress-type wan mode forward state enable protocol web"
 
 # Loop for Ethernet port states
-{% for i in range(eth_locks|length) %}
-- "interface eth eth_0/{{ loop.index }} state {{ 'lock' if is_locked else 'unlock' }}"
+{% for i in range(4) %}
+- "interface eth eth_0/{{ i + 1 }} state {{ 'lock' if eth_locks[i] else 'unlock' }}"
 {% endfor %}
 
 - "exit"

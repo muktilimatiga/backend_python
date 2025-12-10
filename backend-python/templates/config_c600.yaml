@@ -6,21 +6,20 @@
 - "interface {{ interface_onu }}"
 - "name {{ customer.name }}"
 - "description {{ customer.address }}"
-- "tcont 1 name CIGNAL profile {{ up_profile }}"
+- "tcont 1 name CIGNAL profile UP-{{ up_profile }}"
 - "gemport 1 name CIGNAL tcont 1"
 - "exit"
 - "interface vport-1/{{ pon_slot }}/{{ pon_card }}.1:{{ onu_id }}"
 - "service-port 1 vport 1 user-vlan {{ vlan }} vlan {{ vlan }}"
-- "qos traffic-policy {{ down_profile }} direction egress"
+- "qos traffic-policy DOWN-{{ down_profile }} direction egress"
 - "exit"
 - "pon-onu-mng {{ interface_onu }}"
 - "service CIGNAL gemport 1 vlan {{ vlan }}"
 - "wan-ip ipv4 mode pppoe username {{ pppoe_user }} password {{ pppoe_pass }} vlan-profile vlan{{ vlan }} host 1"
 - "security-mgmt 2 ingress-type wan mode forward state enable protocol web"
 # Loop for Ethernet port states
-{% for i in range(eth_locks|length) %}
-- "int eth eth_0/{{ i + 1 }} sta {% if eth_locks[i] %}lock{% else %}unlock{% endif %}"
+{% for i in range(4) %}
+- "interface eth eth_0/{{ i + 1 }} state {{ 'lock' if eth_locks[i] else 'unlock' }}"
 {% endfor %}
-
 - "exit"
 - "exit"

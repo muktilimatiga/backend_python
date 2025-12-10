@@ -611,10 +611,11 @@ class TelnetClient:
             await asyncio.sleep(0.3) 
 
         summary = {
-            "serial_number": config_request.sn,
-            "pppoe_user": config_request.customer.pppoe_user,
-            "location": iface_onu,
-            "profile": f"UP-{up_paket} / DOWN-{down_paket}"
+            "Serial Number": config_request.sn,
+            "ID Pelanggan": config_request.customer.pppoe_user,
+            "Nama Pelanggan": config_request.customer.name,
+            "OLT dan ONU": iface_onu,
+            "Profil yang dipakai": f"UP-{up_paket} / DOWN-{down_paket}"
         }
 
         logs.extend([
