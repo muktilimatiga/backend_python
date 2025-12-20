@@ -49,11 +49,11 @@ def build_driver(headless: bool) -> webdriver.Chrome:
         driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"Failed to initialize ChromeDriver: {e}")
+        raise e
 
     return driver
-
 
 def _debug_dump(driver, label="debug"):
     try:
@@ -136,56 +136,81 @@ def maybe_login(driver, base_url: str, username: str, password: str):
         raise
 
 
-def maybe_login_noc(driver, base_url: str, username: str, password: str):
+def maybe_login_noc(driver, login_url: str, username: str, password: str):
+    """ 
+    Logs into the NOC portal. 
+    Robust version: Checks for success AND failure (alerts/text) in a loop.
     """
-    Logs into the NOC portal (not CS). Assumes a standard username/password form.
-    """
-    log.info(f"[NOC] Opening login page: {base_url}")
-    driver.get(base_url)
+    log.info(f"[NOC] Opening login page: {login_url}")
+    driver.get(login_url)
     time.sleep(2)
 
+    # 1. Check if already logged in
+    if "logout" in driver.page_source.lower():
+        log.info("[NOC] Already logged in — skipping login.")
+        return
+
     try:
-        # Check if already logged in (e.g. dashboard visible)
-        if "logout" in driver.page_source.lower():
-            log.info("[NOC] Already logged in — skipping login.")
-            return
-
-        # Wait until username field is visible
-        wait(driver, 20).until(EC.presence_of_element_located((By.NAME, "username")))
-
-        # Fill username and password
+        # 2. Fill Username/Password
+        wait(driver, 10).until(EC.presence_of_element_located((By.NAME, "username")))
+        
         user_field = driver.find_element(By.NAME, "username")
         pass_field = driver.find_element(By.NAME, "password")
 
-        user_field.clear()
-        pass_field.clear()
-        user_field.send_keys(username)
-        pass_field.send_keys(password)
+        user_field.clear(); user_field.send_keys(username)
+        pass_field.clear(); pass_field.send_keys(password)
 
-        # Submit form (works with both <button> and <input type="submit">)
+        # 3. Submit
         login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
         driver.execute_script("arguments[0].click();", login_btn)
+        log.info("[NOC] Login submitted. Checking result...")
 
-        # Wait for dashboard or ticket list to appear
-        log.info("[NOC] Waiting for dashboard/ticket list to load...")
-        wait(driver, 25).until(
-            EC.any_of(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "table, div.modal")),
-                EC.url_contains("dashboard"),
-                EC.url_contains("ticket")
-            )
-        )
+        # 4. Wait for Success OR Failure (Polling Loop)
+        # We check the status every 1 second for up to 15 seconds
+        for i in range(15):
+            time.sleep(1)
+            current_url = driver.current_url
+            # Grab body text safely (handle StaleElementReferenceException automatically by refetching)
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+            except Exception:
+                continue
 
-        log.info("[NOC] Login successful.")
-    except TimeoutException:
-        driver.save_screenshot("selenium_artifacts/login-fail-noc.png")
-        log.error("[NOC] Timeout while waiting for login page or dashboard. Check URL or credentials.")
-        raise
+            # --- SUCCESS CONDITIONS ---
+            if "dashboard" in current_url or "ticket" in current_url:
+                log.info("[NOC] Login successful (URL detected).")
+                return
+            if len(driver.find_elements(By.CSS_SELECTOR, "table, div.modal")) > 0:
+                log.info("[NOC] Login successful (Table detected).")
+                return
+
+            # --- FAILURE CONDITIONS ---
+            # Add any specific Indonesian or English error terms your app uses
+            if "wrong username" in body_text or "invalid" in body_text or "gagal" in body_text:
+                log.error(f"!!! LOGIN FAILED: Server said '{body_text[:100]}...'")
+                raise Exception(f"Login credentials rejected: {body_text[:50]}...")
+                
+            # --- ALERT POPUP CHECK ---
+            try:
+                alert = driver.switch_to.alert
+                alert_text = alert.text
+                alert.accept()
+                log.error(f"!!! LOGIN BLOCKED BY ALERT: {alert_text}")
+                raise Exception(f"Login blocked by alert: {alert_text}")
+            except Exception as e:
+                # If the exception is the one we just raised, re-raise it
+                if "blocked by alert" in str(e): raise e
+                # Otherwise, it just means no alert is present, which is good
+                pass
+
+        # 5. Timeout Fallback
+        log.error("[NOC] Login timed out. Dumping page state.")
+        log.error(f"Final URL: {driver.current_url}")
+        raise TimeoutException("Login transition never completed (Dashboard not found).")
+
     except Exception as e:
-        driver.save_screenshot("selenium_artifacts/login-fail-noc.png")
-        log.error(f"[NOC] Unexpected error during login: {e}", exc_info=True)
+        log.error(f"[NOC] Login Process Failed: {e}")
         raise
-
 def search_user(driver, query: str):
     """
     Use 'Cari User' form: input[name='type_cari'] + button[name='cari_tagihan'].
@@ -379,7 +404,8 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
     driver = build_driver(headless)
     try:
         # Use settings variable for consistency
-        maybe_login_noc(driver, settings.TICKET_NOC_URL, noc_username, noc_password)
+        maybe_login_noc(driver, settings.LOGIN_URL, noc_username, noc_password)
+        log.info()
         driver.get(settings.TICKET_NOC_URL)
         
         log.info("[NOC] Waiting for ticket table to load...")
