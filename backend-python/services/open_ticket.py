@@ -405,7 +405,7 @@ def process_ticket_as_noc(noc_username: str, noc_password: str, query: str, head
     try:
         # Use settings variable for consistency
         maybe_login_noc(driver, settings.LOGIN_URL, noc_username, noc_password)
-        log.info()
+        log.info("[NOC] Logged in successfully. Navigating to ticket page...")
         driver.get(settings.TICKET_NOC_URL)
         
         log.info("[NOC] Waiting for ticket table to load...")
