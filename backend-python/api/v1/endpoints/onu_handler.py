@@ -26,7 +26,7 @@ def _parse_interface(interface: str) -> str:
     return interface.split(":")[0]
     
 
-@router.get("/{olt_name}/onu/cek", response_model=OnuFullResponse)
+@router.post("/onu/cek", response_model=OnuFullResponse)
 async def cek_onu(request: OnuDetailRequest ):
     target_olt = request.olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)

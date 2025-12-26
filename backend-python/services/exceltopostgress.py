@@ -13,7 +13,6 @@ POSTGRES_URI = os.getenv(
 TABLE_NAME  = os.getenv("POSTGRES_TABLE", "data_fiber")
 BATCH_SIZE  = int(os.getenv("BATCH_SIZE", "1000"))
 
-app = FastAPI()
 
 class ExcelHandler:
     """

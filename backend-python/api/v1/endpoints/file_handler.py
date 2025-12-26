@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from services.exceltopostgress import ExcelHandler
 
-router = APIRouter
+router = APIRouter()
 
 # Handle ExceltoDatabases
 @router.post("/exceltodb")

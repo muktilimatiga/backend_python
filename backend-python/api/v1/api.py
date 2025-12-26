@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from api.v1.endpoints import (
-    cli, customer_scrapper, open_ticket, telnet, file_handler
+    cli, customer_scrapper, open_ticket, telnet, file_handler, onu_handler
 )
 
 api_router = APIRouter()
@@ -34,7 +34,7 @@ api_router.include_router(
 
 #Handle ONU 
 api_router.include_router(
-    telnet.router,
+    onu_handler.router,
     prefix="/onu",
     tags=["ONU"],
 )

@@ -17,3 +17,6 @@ telnetlib3==2.0.4
 urllib3==2.5.0
 uvicorn==0.38.0
 webdriver_manager==4.0.2
+openpyxl
+pandas
+python-multipart
