@@ -77,8 +77,20 @@ class OnuDetail(BaseModel):
     modem_logs: List[OnuLogEntry] = []
 
 class BatchConfigurationRequest(BaseModel):
-    configs: List[ConfigurationRequest]
+    items: List[ConfigurationRequest]
 
-class BatchConfigResult(BaseModel):
-    success: List[ConfigurationSummary]
-    failed: List[Dict[str, Any]]
+# Output: Status for a single item in the batch
+class BatchItemResult(BaseModel):
+    # It helps if your ConfigurationRequest has an ID or unique field (like sn or username)
+    # to identify which result belongs to which request.
+    identifier: str 
+    success: bool
+    message: str
+    logs: List[str]
+
+# Output: The final response for the whole batch
+class BatchConfigurationResponse(BaseModel):
+    total: int
+    success_count: int
+    fail_count: int
+    results: List[BatchItemResult]

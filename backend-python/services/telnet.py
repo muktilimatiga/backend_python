@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict, Any
 from jinja2 import Environment, FileSystemLoader
 from core.olt_config import PACKAGE_OPTIONS, OLT_OPTIONS
-from schemas.config_handler import UnconfiguredOnt, ConfigurationRequest
+from schemas.config_handler import UnconfiguredOnt, ConfigurationRequest, ConfigurationBridgeRequest
 import yaml
 
 logging.basicConfig(level=logging.INFO)
@@ -631,3 +631,77 @@ class TelnetClient:
         ])
 
         return logs, summary
+    
+
+async def config_bridge(self, config_bridge_request: ConfigurationBridgeRequest, vlan: str):
+    ont_list = await self.find_unconfigured_onts()
+    target_ont = next((ont for ont in ont_list if ont.sn == config_bridge_request.sn), None)
+    if not target_ont:
+        raise LookupError(f"ONT dengan SN {config_bridge_request.sn} tidak ditemukan.")
+    
+    base_iface = f"gpon-olt_1/{target_ont.pon_slot}/{target_ont.pon_port}"
+    if self.is_c600:
+        base_iface = f"gpon_olt-1/{target_ont.pon_slot}/{target_ont.pon_port}"
+
+    onu_id = await self.find_next_available_onu_id(base_iface)
+    package = PACKAGE_OPTIONS[config_bridge_request.package]
+    olt_profile_type = "F670" if config_bridge_request.modem_type == "ZTEG-F670" else "ALL"
+    vlan = vlan(config_bridge_request.vlan)
+
+    iface_onu = f"{'gpon_onu-1' if self.is_c600 else 'gpon-onu_1'}/{target_ont.pon_slot}/{target_ont.pon_port}:{onu_id}"
+    if self.is_c600:
+        iface_onu = f"gpon_onu-1/{target_ont.pon_port}/{target_ont.pon_slot}:{onu_id}"
+    
+        context = { 
+        "interface_olt": base_iface, 
+        "interface_onu": iface_onu, 
+        "pon_slot": target_ont.pon_slot, 
+        "pon_port": target_ont.pon_port, 
+        "onu_id": onu_id, 
+        "sn": config_bridge_request.sn, 
+        "customer": config_bridge_request.customer, 
+        "vlan": config_bridge_request.vlan, 
+        "paket" : config_bridge_request.package,
+        "jenismodem": olt_profile_type,
+    }
+        
+    template_name = "config_bridge.yaml"
+    
+    def _render_and_parse_yaml():
+        if jinja_env is None:
+            raise RuntimeError("Jinja2 environment not loaded!")
+        template = jinja_env(template_name)
+        rendered = template.render(context)
+
+    commands = await asyncio.to_thread(_render_and_parse_yaml)
+    logs = [f"Memulai konfigurasi untuk SN: {config_bridge_request.sn} di {iface_onu}"]
+    logging.info(f"Memulai konfigurasi. Total Command: {len(commands)}")
+
+    for cmd in commands:
+        logs.append(f"CMD > {cmd}")
+        logging.info(f"EXECUTING: {cmd}")
+        output = await self._execute_command(cmd)
+        if output:
+            logs.append(f"LOG < {output}")
+        await asyncio.sleep(0.3)
+
+    summary = {
+        "Serial Number": config_bridge_request.sn,
+        "ID Pelanggan": config_bridge_request.customer.pppoe_user,
+        "Nama Pelanggan": config_bridge_request.customer,
+        "OLT dan ONU": iface_onu,
+        "Profil yang dipakai": config_bridge_request.package
+    }
+
+    logs.extend([
+                    "KONFIGURASI SELESAI",
+            "=========================================================",
+            f"Serial Number         : {config_bridge_request.sn}",
+            f"ID pelanggan          : {config_bridge_request.customer.pppoe_user}",
+            f"Nama pelanggan        : {config_bridge_request.customer.name}",
+            f"OLT dan ONU           : {iface_onu}",
+            f"Profil yang dipakai   : {config_bridge_request.package}",
+            "========================================================="
+    ])
+
+    return logs, summary
