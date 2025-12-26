@@ -27,35 +27,32 @@ def _parse_interface(interface: str) -> str:
     
 
 @router.post("/onu/cek", response_model=OnuFullResponse)
-async def cek_onu(request: OnuDetailRequest ):
+async def cek_onu(request: OnuDetailRequest):
     target_olt = request.olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)
     if not olt_info:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"OLT {request.olt_name} tidak ditemukan!")
+        raise HTTPException(status_code=404, detail=f"OLT {request.olt_name} tidak ditemukan!")
     
     try:
         async with TelnetClient(
-            host = olt_info["ip"],  
+            host=olt_info["ip"],  
             username=settings.OLT_USERNAME,
             password=settings.OLT_PASSWORD,
             is_c600=olt_info["c600"],
-            interface=request.interface,
         ) as handler:
-            detail_data = await handler.get_onu_detail(request.interface),
-            attenuation_data = await handler.get_attenuation(request.interface)
+            
+            # 1. Get the data (Ensure NO commas at the end!)
+            detail_data = await handler.get_onu_detail(request.interface)
+            attenuation = await handler.get_attenuation(request.interface)
         
+        # 2. Return the CORRECT response model
+        # Do NOT return OnuDetailResponse here!
         return OnuFullResponse(
             detail_data=detail_data,
-            attenuation_data=attenuation_data
-            )
+            attenuation_data=attenuation)
     
-    except (ConnectionError, asyncio.TimeoutError) as e:
-        raise HTTPException(status_code=504, detail=f"Gagal terhubung atau timeout saat koneksi ke OLT: {e}")
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        # This catches the OLT error text if it wasn't caught inside TelnetClient
         raise HTTPException(status_code=500, detail=f"Proses cek gagal: {e}")
     
 @router.get("/{olt_name}/onu/reboot")

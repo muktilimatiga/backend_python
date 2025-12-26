@@ -273,32 +273,35 @@ class TelnetClient:
 
         prefix = "gpon_onu-" if self.is_c600 else "gpon-onu_"
 
-        if not interface.startswith("gpon"):
-            full_interface = f"{prefix}{interface}"
-        else:
+        # 1. FIX: Simpler logic to ensure we only have ONE prefix
+        if interface.startswith("gpon"):
+             # If input is already "gpon-onu_1/1/1:1", just use it
             full_interface = interface
+        else:
+             # If input is "1/1/1:1", add the prefix
+            full_interface = f"{prefix}{interface}"
 
+        # 2. FIX: Use full_interface directly (don't add prefix again!)
         cmd = f"show gpon onu detail-info {full_interface}"
+        
+        logging.info(f"EXECUTING: {cmd}") # Debug log
         raw_output = await self._execute_command(cmd)
 
-        logging.debug(f"Raw output from OLT for {full_interface}: {raw_output}")
-
         if not raw_output or "No related information" in raw_output:
-            raise LookupError(f"No ONU found or no information returned for {full_interface}.")
+            raise LookupError(f"No ONU found for {full_interface}.")
 
-        parsed_data = TelnetClient._parse_onu_detail_output(raw_output)
+        # 3. FIX: Ensure you return the PARSED dictionary, not the raw string
         
-        logging.info(f"Parsed data for {full_interface}: {parsed_data}")
-        return parsed_data
+        return raw_output
 
-    async def get_gpon_onu_state(self, base_interface: str) -> str:
+    async def get_gpon_onu_state(self, interface: str) -> str:
         """
         Cek 1 port
         """
         
         prefix = "gpon_olt-" if self.is_c600 else "gpon-olt_"
         
-        if not base_interface.startswith("gpon"):
+        if not interface.startswith("gpon"):
             full_interface = f"{prefix}{interface}"
         else:
             full_interface = interface
@@ -313,20 +316,23 @@ class TelnetClient:
 
         return raw_output
 
-    async def get_attenuation(self, interface_onu: str,interface) -> str:
+    async def get_attenuation(self, interface: str) -> str:
         prefix = "gpon_onu-" if self.is_c600 else "gpon-onu_"
-        interface_onu = f"{prefix}{interface}"
-        cmd = f"show pon power attenuation {interface_onu}"
+
+        if not interface.startswith("gpon"):
+            full_interface = f"{prefix}{interface}"
+        else:
+            full_interface = interface
+
+        interface = full_interface
+        cmd = f"show pon power attenuation {interface}"
         raw_output = await self._execute_command(cmd)
-        logging.info(f"{raw_output}")
+        logging.info(f"{cmd}:{raw_output}")
 
         if not raw_output or "No related information" in raw_output:
-            raise LookupError(f"No ONU found or no information returned for {interface_onu}.")
-    
-        parsed_data = TelnetClient._parse_onu_attenuation(raw_output)
-        logging.info(f"{parsed_data}")
-        
-        return parsed_data
+            raise LookupError(f"No ONU found or no information returned for {interface}.")
+
+        return raw_output
 
 
     async def get_onu_rx(self, olt_port:str, interface: str) -> str:

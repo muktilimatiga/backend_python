@@ -61,6 +61,7 @@ class OnuDetailResponse(BaseModel):
 class OnuFullResponse(BaseModel):
     detail_data:str
     attenuation_data: str
+    
 class CustomerOnuDetail(BaseModel):
     """
     The main dashboard data response.
