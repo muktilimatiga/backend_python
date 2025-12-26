@@ -271,22 +271,40 @@ class TelnetClient:
     async def get_onu_detail(self, interface: str) -> Dict[str, Any]:
         logging.info(f"Fetching ONU detail for interface: {interface}")
 
-        cmd = f"show gpon onu detail-info {interface}"
+        prefix = "gpon_onu-" if self.is_c600 else "gpon-onu_"
+
+        if not interface.startswith("gpon"):
+            full_interface = f"{prefix}{interface}"
+        else:
+            full_interface = interface
+
+        cmd = f"show gpon onu detail-info {full_interface}"
         raw_output = await self._execute_command(cmd)
 
-        logging.debug(f"Raw output from OLT for {interface}: {raw_output}")
+        logging.debug(f"Raw output from OLT for {full_interface}: {raw_output}")
 
         if not raw_output or "No related information" in raw_output:
-            raise LookupError(f"No ONU found or no information returned for {interface}.")
+            raise LookupError(f"No ONU found or no information returned for {full_interface}.")
 
         parsed_data = TelnetClient._parse_onu_detail_output(raw_output)
         
-        logging.info(f"Parsed data for {interface}: {parsed_data}")
+        logging.info(f"Parsed data for {full_interface}: {parsed_data}")
         return parsed_data
 
-    async def get_gpon_onu_state(self, olt_port: str, interface: str) -> str:
+    async def get_gpon_onu_state(self, base_interface: str) -> str:
+        """
+        Cek 1 port
+        """
+        
         prefix = "gpon_olt-" if self.is_c600 else "gpon-olt_"
-        interface = f"{prefix}{olt_port}"
+        
+        if not base_interface.startswith("gpon"):
+            full_interface = f"{prefix}{interface}"
+        else:
+            full_interface = interface
+
+        interface = f"{prefix}{full_interface}"
+
         cmd = f"show gpon onu state {interface}"
         raw_output = await self._execute_command(cmd)
 
@@ -323,11 +341,21 @@ class TelnetClient:
         return raw_output
     
     async def send_reboot_command(self, interface:str, interface_onu:str) -> str:
+        """
+        Memberi perintah reboot ke onu
+        """
+        
         prefix = "gpon_onu-" if self.is_c600 else "gpon-onu_"
-        interface_onu = f"{prefix}{interface}"
+
+        if not interface.startswith("gpon"):
+            full_interface = f"{prefix}{interface}"
+        else:
+            full_interface = interface
+        
+        full_interface = f"{prefix}{interface}"
         commands_to_send = [
             "configure terminal",
-            f"interface {interface_onu}"
+            f"interface {full_interface}"
         ]
         
         if self.is_c600:
