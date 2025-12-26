@@ -51,6 +51,13 @@ class EthPortStatus(BaseModel):
     interface: str
     is_unlocked: bool
 
+class OnuDetailRequest(BaseModel):
+    interface: str
+    olt_name: str
+
+class OnuDetailResponse(BaseModel):
+    result: str
+
 class CustomerOnuDetail(BaseModel):
     """
     The main dashboard data response.
