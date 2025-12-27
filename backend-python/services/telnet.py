@@ -9,6 +9,7 @@ from schemas.config_handler import UnconfiguredOnt, ConfigurationRequest, Config
 import yaml
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("telnetlib3").setLevel(logging.ERROR)
 
 # --- Removed SessionLoggedOutError ---
 
@@ -24,36 +25,44 @@ class TelnetClient:
         self.username = username
         self.password = password
         self.is_c600 = is_c600
-        self.reader: Optional[telnetlib3.TelnetReader] = None
-        self.writer: Optional[telnetlib3.TelnetWriter] = None
+        self._lock = None
+        self.reader = None
+        self.writer = None
+        self.last_activity = 0
         self._prompt_re = re.compile(r"(.+[>#])\s*$")
         self._pagination_prompt = "--More--"
 
-    async def __aenter__(self):
-        try:
-            self.reader, self.writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, 23),
-                timeout=20
-            )
-            await self._login()
-            await self._disable_pagination()
-            return self
-        except Exception as e:
-            await self._cleanup_connection()
-            raise ConnectionError(f"Failed to connect or login to OLT {self.host}: {e}")
-            
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self._cleanup_connection()
-
-    async def _cleanup_connection(self):
+    @property
+    def lock(self):
+        # Lazy Load: Lock baru dibuat saat pertama kali dipanggil di dalam Loop yang benar
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+    
+    async def connect(self):
+        """Fungsi connect manual (pengganti __aenter__)"""
         if self.writer and not self.writer.is_closing():
+            return # Sudah konek, skip
+            
+        logging.info(f"🔌 Membuka koneksi baru ke {self.host}...")
+        self.reader, self.writer = await asyncio.wait_for(
+            telnetlib3.open_connection(self.host, 23), timeout=20
+        )
+        await self._login()
+        await self._disable_pagination()
+        self.last_activity = asyncio.get_event_loop().time()
+
+    async def close(self):
+        """Fungsi close manual"""
+        if self.writer:
             self.writer.close()
             try:
-                await asyncio.wait_for(self.writer.wait_closed(), timeout=2)
-            except Exception:
+                await self.writer.wait_closed()
+            except:
                 pass
         self.writer = None
         self.reader = None
+
 
     async def _read_until_prompt(self, timeout: int = 20) -> str:
         """
@@ -294,25 +303,25 @@ class TelnetClient:
         
         return raw_output
 
-    async def get_gpon_onu_state(self, interface: str) -> str:
+    async def get_gpon_onu_state(self, base_interface: str) -> str:
         """
         Cek 1 port
         """
         
         prefix = "gpon_olt-" if self.is_c600 else "gpon-olt_"
         
-        if not interface.startswith("gpon"):
-            full_interface = f"{prefix}{interface}"
+        if not base_interface.startswith("gpon"):
+            full_interface = f"{prefix}{base_interface}"
         else:
-            full_interface = interface
+            full_interface = base_interface
 
-        interface = f"{prefix}{full_interface}"
+        base_interface = f"{full_interface}"
 
-        cmd = f"show gpon onu state {interface}"
+        cmd = f"show gpon onu state {base_interface}"
         raw_output = await self._execute_command(cmd)
-
+        
         if not raw_output or "No related information" in raw_output:
-            raise LookupError(f"No PORT found or no information returned for {interface}.")
+            raise LookupError(f"No PORT found or no information returned for {base_interface}.")
 
         return raw_output
 
@@ -335,9 +344,15 @@ class TelnetClient:
         return raw_output
 
 
-    async def get_onu_rx(self, olt_port:str, interface: str) -> str:
+    async def get_onu_rx(self, base_interface: str) -> str:
         prefix = "gpon_olt-" if self.is_c600 else "gpon-olt_"
-        interface = f"{prefix}{olt_port}"
+
+        if not base_interface.startswith("gpon"):
+            full_interface = f"{prefix}{base_interface}"
+        else:
+            full_interface = base_interface
+
+        interface = full_interface
         cmd = f"show pon power onu-rx {interface}"
         raw_output = await self._execute_command(cmd)
 
@@ -345,8 +360,8 @@ class TelnetClient:
             raise LookupError(f"No PORT found or no information returned for {interface}.")
 
         return raw_output
-    
-    async def send_reboot_command(self, interface:str, interface_onu:str) -> str:
+
+    async def send_reboot_command(self, interface:str) -> str:
         """
         Memberi perintah reboot ke onu
         """
@@ -667,75 +682,75 @@ class TelnetClient:
         return logs, summary
     
 
-async def config_bridge(self, config_bridge_request: ConfigurationBridgeRequest, vlan: str):
-    ont_list = await self.find_unconfigured_onts()
-    target_ont = next((ont for ont in ont_list if ont.sn == config_bridge_request.sn), None)
-    if not target_ont:
-        raise LookupError(f"ONT dengan SN {config_bridge_request.sn} tidak ditemukan.")
-    
-    base_iface = f"gpon-olt_1/{target_ont.pon_slot}/{target_ont.pon_port}"
-    if self.is_c600:
-        base_iface = f"gpon_olt-1/{target_ont.pon_slot}/{target_ont.pon_port}"
-
-    onu_id = await self.find_next_available_onu_id(base_iface)
-    package = PACKAGE_OPTIONS[config_bridge_request.package]
-    olt_profile_type = "F670" if config_bridge_request.modem_type == "ZTEG-F670" else "ALL"
-    vlan = vlan(config_bridge_request.vlan)
-
-    iface_onu = f"{'gpon_onu-1' if self.is_c600 else 'gpon-onu_1'}/{target_ont.pon_slot}/{target_ont.pon_port}:{onu_id}"
-    if self.is_c600:
-        iface_onu = f"gpon_onu-1/{target_ont.pon_port}/{target_ont.pon_slot}:{onu_id}"
-    
-        context = { 
-        "interface_olt": base_iface, 
-        "interface_onu": iface_onu, 
-        "pon_slot": target_ont.pon_slot, 
-        "pon_port": target_ont.pon_port, 
-        "onu_id": onu_id, 
-        "sn": config_bridge_request.sn, 
-        "customer": config_bridge_request.customer, 
-        "vlan": config_bridge_request.vlan, 
-        "paket" : config_bridge_request.package,
-        "jenismodem": olt_profile_type,
-    }
+    async def config_bridge(self, config_bridge_request: ConfigurationBridgeRequest, vlan: str):
+        ont_list = await self.find_unconfigured_onts()
+        target_ont = next((ont for ont in ont_list if ont.sn == config_bridge_request.sn), None)
+        if not target_ont:
+            raise LookupError(f"ONT dengan SN {config_bridge_request.sn} tidak ditemukan.")
         
-    template_name = "config_bridge.yaml"
-    
-    def _render_and_parse_yaml():
-        if jinja_env is None:
-            raise RuntimeError("Jinja2 environment not loaded!")
-        template = jinja_env(template_name)
-        rendered = template.render(context)
+        base_iface = f"gpon-olt_1/{target_ont.pon_slot}/{target_ont.pon_port}"
+        if self.is_c600:
+            base_iface = f"gpon_olt-1/{target_ont.pon_slot}/{target_ont.pon_port}"
 
-    commands = await asyncio.to_thread(_render_and_parse_yaml)
-    logs = [f"Memulai konfigurasi untuk SN: {config_bridge_request.sn} di {iface_onu}"]
-    logging.info(f"Memulai konfigurasi. Total Command: {len(commands)}")
+        onu_id = await self.find_next_available_onu_id(base_iface)
+        package = PACKAGE_OPTIONS[config_bridge_request.package]
+        olt_profile_type = "F670" if config_bridge_request.modem_type == "ZTEG-F670" else "ALL"
+        vlan = vlan(config_bridge_request.vlan)
 
-    for cmd in commands:
-        logs.append(f"CMD > {cmd}")
-        logging.info(f"EXECUTING: {cmd}")
-        output = await self._execute_command(cmd)
-        if output:
-            logs.append(f"LOG < {output}")
-        await asyncio.sleep(0.3)
+        iface_onu = f"{'gpon_onu-1' if self.is_c600 else 'gpon-onu_1'}/{target_ont.pon_slot}/{target_ont.pon_port}:{onu_id}"
+        if self.is_c600:
+            iface_onu = f"gpon_onu-1/{target_ont.pon_port}/{target_ont.pon_slot}:{onu_id}"
+        
+            context = { 
+            "interface_olt": base_iface, 
+            "interface_onu": iface_onu, 
+            "pon_slot": target_ont.pon_slot, 
+            "pon_port": target_ont.pon_port, 
+            "onu_id": onu_id, 
+            "sn": config_bridge_request.sn, 
+            "customer": config_bridge_request.customer, 
+            "vlan": config_bridge_request.vlan, 
+            "paket" : config_bridge_request.package,
+            "jenismodem": olt_profile_type,
+        }
+            
+        template_name = "config_bridge.yaml"
+        
+        def _render_and_parse_yaml():
+            if jinja_env is None:
+                raise RuntimeError("Jinja2 environment not loaded!")
+            template = jinja_env(template_name)
+            rendered = template.render(context)
 
-    summary = {
-        "Serial Number": config_bridge_request.sn,
-        "ID Pelanggan": config_bridge_request.customer.pppoe_user,
-        "Nama Pelanggan": config_bridge_request.customer,
-        "OLT dan ONU": iface_onu,
-        "Profil yang dipakai": config_bridge_request.package
-    }
+        commands = await asyncio.to_thread(_render_and_parse_yaml)
+        logs = [f"Memulai konfigurasi untuk SN: {config_bridge_request.sn} di {iface_onu}"]
+        logging.info(f"Memulai konfigurasi. Total Command: {len(commands)}")
 
-    logs.extend([
-                    "KONFIGURASI SELESAI",
-            "=========================================================",
-            f"Serial Number         : {config_bridge_request.sn}",
-            f"ID pelanggan          : {config_bridge_request.customer.pppoe_user}",
-            f"Nama pelanggan        : {config_bridge_request.customer.name}",
-            f"OLT dan ONU           : {iface_onu}",
-            f"Profil yang dipakai   : {config_bridge_request.package}",
-            "========================================================="
-    ])
+        for cmd in commands:
+            logs.append(f"CMD > {cmd}")
+            logging.info(f"EXECUTING: {cmd}")
+            output = await self._execute_command(cmd)
+            if output:
+                logs.append(f"LOG < {output}")
+            await asyncio.sleep(0.3)
 
-    return logs, summary
+        summary = {
+            "Serial Number": config_bridge_request.sn,
+            "ID Pelanggan": config_bridge_request.customer.pppoe_user,
+            "Nama Pelanggan": config_bridge_request.customer,
+            "OLT dan ONU": iface_onu,
+            "Profil yang dipakai": config_bridge_request.package
+        }
+
+        logs.extend([
+                        "KONFIGURASI SELESAI",
+                "=========================================================",
+                f"Serial Number         : {config_bridge_request.sn}",
+                f"ID pelanggan          : {config_bridge_request.customer.pppoe_user}",
+                f"Nama pelanggan        : {config_bridge_request.customer.name}",
+                f"OLT dan ONU           : {iface_onu}",
+                f"Profil yang dipakai   : {config_bridge_request.package}",
+                "========================================================="
+        ])
+
+        return logs, summary

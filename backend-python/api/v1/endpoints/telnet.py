@@ -12,6 +12,7 @@ from schemas.config_handler import (
     BatchItemResult, BatchConfigurationResponse
 )
 from services.telnet import TelnetClient
+from services.connection_manager import olt_manager
 from core.olt_config import OLT_OPTIONS, MODEM_OPTIONS, PACKAGE_OPTIONS
 
 router = APIRouter()
@@ -33,14 +34,15 @@ async def detect_uncfg_onts(olt_name: str):
         raise HTTPException(status_code=404, detail=f"OLT '{olt_name}' tidak ditemukan.")
     
     try:
-        async with TelnetClient(
+        handler = await olt_manager.get_connection(
             host=olt_info["ip"],
             username=settings.OLT_USERNAME,
             password=settings.OLT_PASSWORD,
             is_c600=olt_info["c600"]
-        ) as handler:
-            ont_list = await handler.find_unconfigured_onts()
-            return ont_list
+        )
+        
+        ont_list = await handler.find_unconfigured_onts()
+        return ont_list
     except ConnectionError as e:
         raise HTTPException(status_code=504, detail=f"Gagal terhubung ke OLT: {e}")
     except Exception as e:
