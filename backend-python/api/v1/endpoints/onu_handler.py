@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import PlainTextResponse
 import re
 import asyncio
@@ -17,23 +17,20 @@ def _parse_interface(interface: str) -> str:
     """
     Parsing interface from example 1/1/1:1 to 1/1/1
     """
-    # Pattern looks for: numbers / numbers / numbers : numbers
     pattern = r".*(\d+/\d+/\d+):(\d+)"
-    
     match = re.search(pattern, interface)
     if not match:
          raise ValueError(f"Invalid interface format: {interface}")
-    
-    # Return the port part (Group 1)
     return interface.split(":")[0]
     
 
-@router.post("/onu/cek", response_model=OnuFullResponse)
-async def cek_onu(request: OnuDetailRequest):
-    target_olt = request.olt_name.upper()
+# ✅ FIX 1: Add 'olt_name: str' to arguments
+@router.post("/{olt_name}/onu/cek", response_model=OnuFullResponse)
+async def cek_onu(olt_name: str, request: OnuDetailRequest):
+    target_olt = olt_name.upper() # Use the path param, not request.olt_name
     olt_info = OLT_OPTIONS.get(target_olt)
     if not olt_info:
-        raise HTTPException(status_code=404, detail=f"OLT {request.olt_name} tidak ditemukan!")
+        raise HTTPException(status_code=404, detail=f"OLT {olt_name} tidak ditemukan!")
     
     try:
         handler = await olt_manager.get_connection(
@@ -43,28 +40,27 @@ async def cek_onu(request: OnuDetailRequest):
             is_c600=olt_info["c600"]
         )
             
-            # 1. Get the data (Ensure NO commas at the end!)
         detail_data = await handler.get_onu_detail(request.interface)
         attenuation = await handler.get_attenuation(request.interface)
         
-        # 2. Return the CORRECT response model
-        # Do NOT return OnuDetailResponse here!
         return OnuFullResponse(
             detail_data=detail_data,
             attenuation_data=attenuation)
     
     except Exception as e:
-        # This catches the OLT error text if it wasn't caught inside TelnetClient
         raise HTTPException(status_code=500, detail=f"Proses cek gagal: {e}")
     
+
+# ✅ FIX 2: Add 'olt_name: str' here too. 
+# Also, for GET requests, it is better to use 'Depends' for the model or individual query params.
 @router.get("/{olt_name}/onu/reboot")
-async def reboot_onu(request: OnuDetailRequest):
-    target_olt = request.olt_name.upper()
+async def reboot_onu(olt_name: str, request: OnuDetailRequest = Depends()):
+    target_olt = olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)
     if not olt_info:
         raise HTTPException(
             status_code=404, 
-            detail=f"OLT {request.olt_name} tidak ditemukan!")
+            detail=f"OLT {olt_name} tidak ditemukan!")
     
     try:
         async with TelnetClient(
@@ -78,20 +74,22 @@ async def reboot_onu(request: OnuDetailRequest):
         return OnuDetailResponse(result=data)
     
     except (ConnectionError, asyncio.TimeoutError) as e:
-        raise HTTPException(status_code=504, detail=f"Gagal terhubung atau timeout saat koneksi ke OLT: {e}")
+        raise HTTPException(status_code=504, detail=f"Gagal terhubung atau timeout: {e}")
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proses cek gagal: {e}")
     
+
+# ✅ FIX 3: Add 'olt_name: str' here
 @router.get("/{olt_name}/onu/no-onu", response_model=OnuDetailResponse)
-async def no_onu(request: OnuDetailRequest):
-    target_olt = request.olt_name.upper()
+async def no_onu(olt_name: str, request: OnuDetailRequest = Depends()):
+    target_olt = olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)
     if not olt_info:
         raise HTTPException(
             status_code=404, 
-            detail=f"OLT {request.olt_name} tidak ditemukan!")
+            detail=f"OLT {olt_name} tidak ditemukan!")
     
     try:
         async with TelnetClient(
@@ -105,21 +103,19 @@ async def no_onu(request: OnuDetailRequest):
         return OnuDetailResponse(result=data)
     
     except (ConnectionError, asyncio.TimeoutError) as e:
-        raise HTTPException(status_code=504, detail=f"Gagal terhubung atau timeout saat koneksi ke OLT: {e}")
+        raise HTTPException(status_code=504, detail=f"Gagal terhubung atau timeout: {e}")
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proses cek gagal: {e}")
     
 
+# ✅ FIX 4: Add 'olt_name: str' here (POST request)
 @router.post("/{olt_name}/onu/port_state", response_class=PlainTextResponse)
-async def cek_1_port(request: OnuDetailRequest):
-    # 1. Ambil config OLT
-    target_olt = request.olt_name.upper()
+async def cek_1_port(olt_name: str, request: OnuDetailRequest):
+    target_olt = olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)
     
-    # 2. Minta koneksi ke Manager (Bukan bikin baru)
-    # Manager akan kasih koneksi lama kalau ada, atau bikin baru kalau belum ada
     try:
         handler = await olt_manager.get_connection(
             host=olt_info["ip"],
@@ -128,26 +124,21 @@ async def cek_1_port(request: OnuDetailRequest):
             is_c600=olt_info["c600"]
         )
         
-        # 3. Langsung pakai handler (tanpa indentasi 'async with')
         base_interface = _parse_interface(request.interface)
         data = await handler.get_gpon_onu_state(base_interface)
 
         return PlainTextResponse(content=data)
 
     except Exception as e:
-        # Jangan lupa handle error, tapi jangan close connection di sini 
-        # (biarkan manager yang urus reconnect nanti)
         raise HTTPException(status_code=500, detail=str(e))
     
 
+# ✅ FIX 5: Add 'olt_name: str' here (POST request)
 @router.post("/{olt_name}/onu/port_rx", response_class=PlainTextResponse)
-async def cek_1_port_rx(request: OnuDetailRequest):
-    # 1. Ambil config OLT
-    target_olt = request.olt_name.upper()
+async def cek_1_port_rx(olt_name: str, request: OnuDetailRequest):
+    target_olt = olt_name.upper()
     olt_info = OLT_OPTIONS.get(target_olt)
     
-    # 2. Minta koneksi ke Manager (Bukan bikin baru)
-    # Manager akan kasih koneksi lama kalau ada, atau bikin baru kalau belum ada
     try:
         handler = await olt_manager.get_connection(
             host=olt_info["ip"],
@@ -156,13 +147,10 @@ async def cek_1_port_rx(request: OnuDetailRequest):
             is_c600=olt_info["c600"]
         )
         
-        # 3. Langsung pakai handler (tanpa indentasi 'async with')
         base_interface = _parse_interface(request.interface)
         data = await handler.get_onu_rx(base_interface)
 
         return PlainTextResponse(content=data)
 
     except Exception as e:
-        # Jangan lupa handle error, tapi jangan close connection di sini 
-        # (biarkan manager yang urus reconnect nanti)
         raise HTTPException(status_code=500, detail=str(e))
